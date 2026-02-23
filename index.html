@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>대리점 방문 지도 (41개)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script src="https://openapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=k8vacdhpym&submodules=geocoder"></script>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+<!-- SheetJS for Excel -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+<style>
+html, body { margin:0; padding:0; height:100%; font-family: 'Malgun Gothic', sans-serif; }
+#map { width:100vw; height:100vh; }
+
+#progress {
+  position:absolute;
+  top:10px;
+  right:10px;
+  z-index:1000;
+  background:#fff;
+  padding:10px 16px;
+  border-radius:20px;
+  font-weight:bold;
+  box-shadow:0 2px 8px rgba(0,0,0,.2);
+}
+
+.action-btn {
+  position:absolute;
+  right:10px;
+  z-index:1000;
+  color:#fff;
+  padding:10px 16px;
+  border-radius:20px;
+  font-weight:bold;
+  box-shadow:0 2px 8px rgba(0,0,0,.2);
+  cursor:pointer;
+  border:none;
+  font-size:14px;
+  transition:.2s;
+}
+
+#download-btn {
+  top:50px;
+  background:#4caf50;
+}
+
+#download-btn:hover {
+  background:#45a049;
+}
+
+#loading {
+  position:absolute;
+  top:95px;
+  right:10px;
+  z-index:1000;
+  background:#2196f3;
+  color:#fff;
+  padding:8px 12px;
+  border-radius:16px;
+  font-size:12px;
+  display:none;
+}
+
+/* 말풍선 스타일 */
+.bubble {
+  position:relative;
+  background:#fff;
+  border:2px solid #d32f2f;
+  border-radius:8px;
+  padding:4px 10px;
+  font-size:12px;
+  font-weight:bold;
+  white-space:nowrap;
+  cursor:pointer;
+  transition:.2s;
+}
+
+.bubble.visited {
+  border-color:#1976d2;
+  background-color:#e3f2fd;
+  color:#1976d2;
+}
+
+.bubble:after {
+  content:"";
+  position:absolute;
+  left:50%;
+  transform:translateX(-50%);
+  bottom:-8px;
+  width:0;
+  height:0;
+  border-left:6px solid transparent;
+  border-right:6px solid transparent;
+  border-top:8px solid #d32f2f;
+}
+
+.bubble.visited:after {
+  border-top-color:#1976d2;
+}
+
+/* 모달 */
+#modal {
+  display:none;
+  position:fixed;
+  top:0; left:0;
+  width:100%; height:100%;
+  background:rgba(0,0,0,0.5);
+  z-index:2000;
+  justify-content:center;
+  align-items:center;
+}
+
+#modal.show {
+  display:flex;
+}
+
+#modal-content {
+  background:#fff;
+  border-radius:12px;
+  padding:24px;
+  width:90%;
+  max-width:400px;
+  box-shadow:0 4px 20px rgba(0,0,0,.3);
+  max-height:80vh;
+  overflow-y:auto;
+}
+
+#modal-title {
+  font-size:18px;
+  font-weight:bold;
+  margin-bottom:16px;
+  color:#333;
+}
+
+.modal-section {
+  margin-bottom:16px;
+}
+
+.modal-section label {
+  display:block;
+  font-weight:bold;
+  margin-bottom:8px;
+  color:#555;
+}
+
+.status-buttons {
+  display:flex;
+  gap:8px;
+}
+
+.status-btn {
+  flex:1;
+  padding:10px;
+  border:2px solid #ddd;
+  background:#fff;
+  border-radius:8px;
+  cursor:pointer;
+  font-weight:bold;
+  transition:.2s;
+}
+
+.status-btn:hover {
+  background:#f5f5f5;
+}
+
+.status-btn.active.visited {
+  border-color:#1976d2;
+  background:#1976d2;
+  color:#fff;
+}
+
+.status-btn.active.not-visited {
+  border-color:#d32f2f;
+  background:#d32f2f;
+  color:#fff;
+}
+
+#comment-input {
+  width:100%;
+  min-height:100px;
+  padding:10px;
+  border:2px solid #ddd;
+  border-radius:8px;
+  font-size:14px;
+  resize:vertical;
+  box-sizing:border-box;
+  font-family:inherit;
+}
+
+#char-count {
+  text-align:right;
+  font-size:12px;
+  color:#666;
+  margin-top:4px;
+}
+
+.modal-buttons {
+  display:flex;
+  gap:8px;
+  margin-top:20px;
+}
+
+.modal-btn {
+  flex:1;
+  padding:12px;
+  border:none;
+  border-radius:8px;
+  font-weight:bold;
+  cursor:pointer;
+  font-size:14px;
+  transition:.2s;
+}
+
+.modal-btn.save {
+  background:#4caf50;
+  color:#fff;
+}
+
+.modal-btn.save:hover {
+  background:#45a049;
+}
+
+.modal-btn.cancel {
+  background:#f5f5f5;
+  color:#333;
+}
+
+.modal-btn.cancel:hover {
+  background:#e0e0e0;
+}
+</style>
+</head>
+
+<body>
+
+<div id="progress">완료율 0%</div>
+<button id="download-btn" class="action-btn">📥 엑셀 다운로드</button>
+<div id="loading">처리 중...</div>
+<div id="map"></div>
+
+<!-- 방문 정보 모달 -->
+<div id="modal">
+  <div id="modal-content">
+    <div id="modal-title"></div>
+    
+    <div class="modal-section">
+      <label>방문 상태</label>
+      <div class="status-buttons">
+        <button class="status-btn not-visited" data-status="false">미방문</button>
+        <button class="status-btn visited" data-status="true">방문완료</button>
+      </div>
+    </div>
+    
+    <div class="modal-section">
+      <label>코멘트 (500자 이내)</label>
+      <textarea id="comment-input" maxlength="500" placeholder="방문 후기나 메모를 입력하세요..."></textarea>
+      <div id="char-count">0/500</div>
+    </div>
+    
+    <div class="modal-buttons">
+      <button class="modal-btn cancel">취소</button>
+      <button class="modal-btn save">저장</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================
+// Firebase 설정
+// ============================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDjTcHpGJskJNkY-qLlU02A_yDe4fCZIaI",
+  authDomain: "store-map-5cf8b.firebaseapp.com",
+  projectId: "store-map-5cf8b",
+  storageBucket: "store-map-5cf8b.firebasestorage.app",
+  messagingSenderId: "805186031186",
+  appId: "1:805186031186:web:694602e04ee9579189998b"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ============================================
+// 매장 데이터 (41개)
+// ============================================
+const stores = [
+{num:1,name:"울림터대리점 군자역점",address:"서울특별시 광진구 능동로 297"},
+{num:2,name:"다원대리점 중곡직영점",address:"서울 광진구 긴고랑로 115"},
+{num:3,name:"광장대리점 중곡점",address:"서울 광진구 면목로 160"},
+{num:4,name:"울림터대리점 본점",address:"서울 광진구 아차산로 220"},
+{num:5,name:"광장대리점 구의점",address:"서울 광진구 아차산로 415"},
+{num:6,name:"울림터대리점 건대이마트점",address:"서울특별시 광진구 아차산로 262"},
+{num:7,name:"울림터대리점 구의역점",address:"서울 광진구 자양로 93"},
+{num:8,name:"알파대리점 노원직영점",address:"서울 노원구 노해로 490"},
+{num:9,name:"신창대리점 공릉역점",address:"서울 노원구 동일로 1077"},
+{num:10,name:"가능대리점 상계직영점",address:"서울 노원구 동일로 1379"},
+{num:11,name:"PS&M (마들역점)",address:"서울 노원구 동일로 1538"},
+{num:12,name:"서울ent대리점 공릉직영점",address:"서울 노원구 동일로192길 11"},
+{num:13,name:"신창대리점 노원역직영점",address:"서울 노원구 상계로 75"},
+{num:14,name:"알파대리점 석계역점",address:"서울 노원구 석계로 4"},
+{num:15,name:"신창대리점 광운대점",address:"서울 노원구 석계로 95"},
+{num:16,name:"ACE대리점 은행사거리점",address:"서울 노원구 한글비석로 254"},
+{num:17,name:"서울ent대리점 상계역점",address:"서울 노원구 한글비석로 384"},
+{num:18,name:"상록수대리점 우장산점",address:"서울 강서구 강서로 242"},
+{num:19,name:"동진대리점 강서중앙점",address:"서울 강서구 강서로 279"},
+{num:20,name:"동진대리점 까치산역 본점",address:"서울 강서구 강서로 63"},
+{num:21,name:"참스타대리점 등촌점",address:"서울 강서구 강서로56길"},
+{num:22,name:"신나는 마곡직영점",address:"서울 강서구 공항대로 168"},
+{num:23,name:"강서대리점 염창역점",address:"서울 강서구 공항대로 635"},
+{num:24,name:"동진대리점 마곡본점",address:"서울 강서구 강서로 385"},
+{num:25,name:"동진대리점 마곡나루점",address:"서울 강서구 마곡중앙로 161-17"},
+{num:26,name:"참스타대리점 블루나인점",address:"서울 강서구 양천로 583"},
+{num:27,name:"큰사랑대리점 방화직영점",address:"서울 강서구 양천로 73"},
+{num:28,name:"PS&M (화곡역점)",address:"서울 강서구 화곡로 161,"},
+{num:29,name:"세하대리점 화곡역본점",address:"서울 강서구 화곡로 190"},
+{num:30,name:"동진대리점 화곡직영점",address:"서울 강서구 화곡로25길 2"},
+{num:31,name:"동진대리점 가양역 본점",address:"서울 강서구 화곡로68길 3"},
+{num:32,name:"PS&M (등촌역점)",address:"서울 양천구 공항대로 564"},
+{num:33,name:"강서대리점 신월본점",address:"서울 양천구 남부순환로 354"},
+{num:34,name:"참스타대리점 신월점",address:"서울 양천구 남부순환로 585"},
+{num:35,name:"유원대리점 목동41타워점",address:"서울 양천구 목동동로 293"},
+{num:36,name:"한유대리점 목동광장직영점",address:"서울 양천구 목동동로 379"},
+{num:37,name:"새서울대리점 신정직영점",address:"서울 양천구 목동동로 53"},
+{num:38,name:"유원대리점 목동본점",address:"서울 양천구 목동서로 63"},
+{num:39,name:"MD대리점 염창동직영점",address:"서울 양천구 목동중앙본로 126"},
+{num:40,name:"세하대리점 등촌깨비시장점",address:"서울 양천구 목동중앙북로 29"},
+{num:41,name:"세하 신정본점",address:"서울 양천구 중앙로 267"}
+];
+
+let storeData = {};
+let currentStore = null;
+let map;
+
+// ============================================
+// Firebase 함수들
+// ============================================
+
+async function loadDataFromFirebase() {
+  try {
+    const snapshot = await db.collection('stores41').get();
+    snapshot.forEach(doc => {
+      storeData[doc.id] = doc.data();
+    });
+    console.log('Firebase에서 데이터 로드 완료:', Object.keys(storeData).length + '개');
+    updateAllBubbles();
+    updateProgress();
+  } catch (error) {
+    console.error('데이터 로드 실패:', error);
+  }
+}
+
+async function saveDataToFirebase(storeNum, data) {
+  showLoading(true);
+  try {
+    await db.collection('stores41').doc(String(storeNum)).set(data);
+    console.log(`매장 ${storeNum} 저장 완료`);
+    showLoading(false);
+  } catch (error) {
+    console.error('저장 실패:', error);
+    alert('저장에 실패했습니다. 다시 시도해주세요.');
+    showLoading(false);
+  }
+}
+
+function showLoading(show) {
+  document.getElementById('loading').style.display = show ? 'block' : 'none';
+}
+
+function updateAllBubbles() {
+  Object.keys(storeData).forEach(num => {
+    const bubble = document.getElementById(`b-${num}`);
+    if (bubble && storeData[num].visited) {
+      bubble.classList.add('visited');
+    }
+  });
+}
+
+// ============================================
+// 엑셀 다운로드 기능
+// ============================================
+
+function downloadExcel() {
+  const excelData = [];
+  excelData.push(['넘버', '대리점 이름', '대리점 주소', '완료 여부', '코멘트']);
+  
+  stores.forEach(store => {
+    const data = storeData[store.num] || {visited: false, comment: ""};
+    excelData.push([
+      store.num,
+      store.name,
+      store.address,
+      data.visited ? '완료' : '미방문',
+      data.comment || ''
+    ]);
+  });
+  
+  const ws = XLSX.utils.aoa_to_sheet(excelData);
+  ws['!cols'] = [
+    {wch: 8},
+    {wch: 30},
+    {wch: 50},
+    {wch: 12},
+    {wch: 50}
+  ];
+  
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '대리점 방문 현황');
+  
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}${String(today.getMonth()+1).padStart(2,'0')}${String(today.getDate()).padStart(2,'0')}`;
+  const filename = `대리점_방문현황_${dateStr}.xlsx`;
+  
+  XLSX.writeFile(wb, filename);
+}
+
+document.getElementById('download-btn').addEventListener('click', downloadExcel);
+
+// ============================================
+// 기존 함수들
+// ============================================
+
+function updateProgress(){
+  const total = stores.length;
+  const done = Object.values(storeData).filter(v=>v.visited).length;
+  const percent = Math.round((done/total)*100);
+  document.getElementById("progress").innerText =
+    `완료율 ${done}/${total} (${percent}%)`;
+}
+
+function openModal(storeNum){
+  currentStore = storeNum;
+  const store = stores.find(s => s.num === storeNum);
+  const data = storeData[storeNum] || {visited: false, comment: ""};
+  
+  document.getElementById("modal-title").innerHTML = 
+    `<div style="margin-bottom: 8px;">${store.num}. ${store.name}</div>
+     <div style="font-size: 14px; color: #666; font-weight: normal;">${store.address}</div>`;
+  
+  document.querySelectorAll(".status-btn").forEach(btn => {
+    btn.classList.remove("active");
+    if(btn.dataset.status === String(data.visited)){
+      btn.classList.add("active");
+    }
+  });
+  
+  const textarea = document.getElementById("comment-input");
+  textarea.value = data.comment || "";
+  updateCharCount();
+  
+  document.getElementById("modal").classList.add("show");
+}
+
+function closeModal(){
+  document.getElementById("modal").classList.remove("show");
+  currentStore = null;
+}
+
+async function saveModal(){
+  const visitedBtn = document.querySelector(".status-btn.active");
+  const visited = visitedBtn ? visitedBtn.dataset.status === "true" : false;
+  const comment = document.getElementById("comment-input").value;
+  
+  const data = {visited, comment, updatedAt: new Date().toISOString()};
+  storeData[currentStore] = data;
+  
+  await saveDataToFirebase(currentStore, data);
+  
+  const bubble = document.getElementById(`b-${currentStore}`);
+  if(visited){
+    bubble.classList.add('visited');
+  } else {
+    bubble.classList.remove('visited');
+  }
+  
+  updateProgress();
+  closeModal();
+}
+
+function updateCharCount(){
+  const textarea = document.getElementById("comment-input");
+  const count = textarea.value.length;
+  document.getElementById("char-count").innerText = `${count}/500`;
+}
+
+document.querySelector(".modal-btn.cancel").addEventListener('click', closeModal);
+document.querySelector(".modal-btn.save").addEventListener('click', saveModal);
+document.getElementById("comment-input").addEventListener('input', updateCharCount);
+
+document.querySelectorAll(".status-btn").forEach(btn => {
+  btn.addEventListener("click", function(){
+    document.querySelectorAll(".status-btn").forEach(b => b.classList.remove("active"));
+    this.classList.add("active");
+  });
+});
+
+document.getElementById("modal").addEventListener("click", function(e){
+  if(e.target === this){
+    closeModal();
+  }
+});
+
+// ============================================
+// 앱 초기화
+// ============================================
+
+async function initializeApp() {
+  await loadDataFromFirebase();
+  
+  naver.maps.onJSContentLoaded = function(){
+    map = new naver.maps.Map("map", {
+      center: new naver.maps.LatLng(37.5665, 126.9780),
+      zoom: 11
+    });
+
+    const bounds = new naver.maps.LatLngBounds();
+
+    stores.forEach((store,index)=>{
+      if (!storeData[store.num]) {
+        storeData[store.num] = {visited: false, comment: ""};
+      }
+
+      setTimeout(()=>{
+        naver.maps.Service.geocode(
+          {query:store.address},
+          function(status,res){
+            if(status !== naver.maps.Service.Status.OK) return;
+
+            const addr = res.v2.addresses[0];
+            const pos = new naver.maps.LatLng(addr.y, addr.x);
+            bounds.extend(pos);
+
+            const isVisited = storeData[store.num].visited ? 'visited' : '';
+            const content = `
+              <div class="bubble ${isVisited}" id="b-${store.num}">
+                ${store.num}. ${store.name}
+              </div>
+            `;
+
+            const marker = new naver.maps.Marker({
+              position: pos,
+              map: map,
+              icon:{
+                content: content,
+                anchor: new naver.maps.Point(50, 40)
+              }
+            });
+
+            naver.maps.Event.addListener(marker,"click",()=>{
+              openModal(store.num);
+            });
+
+            if(index === stores.length-1){
+              map.fitBounds(bounds);
+              updateProgress();
+            }
+          }
+        );
+      }, index*15);
+    });
+  };
+  
+  if (typeof naver !== 'undefined' && naver.maps) {
+    naver.maps.onJSContentLoaded();
+  }
+}
+
+window.addEventListener('DOMContentLoaded', initializeApp);
+</script>
+
+</body>
+</html>
